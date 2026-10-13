@@ -2,6 +2,8 @@ import { config, heliusUrl } from "../config";
 import { HttpError } from "../errors";
 import type { HistoryPage, RawTx } from "./types";
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /* ---------- per-instance concurrency limit ---------- */
 let active = 0;
 const queue: (() => void)[] = [];
@@ -16,34 +18,86 @@ async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-export async function rpc<T>(method: string, params: unknown): Promise<T> {
-  const url = heliusUrl();
-  for (let attempt = 0; ; attempt++) {
-    const res = await withSlot(() =>
-      fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: method, method, params }),
-        cache: "no-store",
-      }),
-    );
-    if ((res.status === 429 || res.status >= 500) && attempt < 4) {
-      await sleep(300 * 2 ** attempt + Math.random() * 200);
-      continue;
-    }
-    if (!res.ok) throw new HttpError(502, `Helius returned HTTP ${res.status} for ${method}.`);
-    const json = await res.json();
-    if (json.error) {
-      if (json.error.code === 429 && attempt < 4) {
-        await sleep(300 * 2 ** attempt);
-        continue;
-      }
-      throw new HttpError(502, `Helius ${method} failed: ${json.error.message ?? "unknown error"}`);
-    }
-    return json.result as T;
+/* ---------- per-instance requests-per-second limit ---------- */
+class Pacer {
+  private next = 0;
+  constructor(private rps: number) {}
+  /** Wait for this request's turn. Requests are spaced evenly at 1/rps seconds. */
+  async take() {
+    const now = Date.now();
+    const at = Math.max(now, this.next);
+    this.next = at + 1000 / this.rps;
+    if (at > now) await sleep(at - now);
   }
+  /** After a 429, hold back every queued request, not just the one that failed. */
+  pause(ms: number) {
+    this.next = Math.max(this.next, Date.now() + ms);
+  }
+}
+const rpcPacer = new Pacer(config.heliusRps);
+const dasPacer = new Pacer(config.heliusDasRps);
+
+const RETRYABLE = new Set([408, 429, 500, 502, 503, 504]);
+const MAX_ATTEMPTS = 5;
+// Helius suggests capping backoff at 30s; serverless functions time out sooner, so cap lower.
+const MAX_DELAY_MS = 8000;
+
+class RateLimited extends Error {}
+
+export async function rpc<T>(method: string, params: unknown, kind: "rpc" | "das" = "rpc"): Promise<T> {
+  const url = heliusUrl();
+  const pacer = kind === "das" ? dasPacer : rpcPacer;
+  let delay = 1000;
+  let lastStatus = 0;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    await pacer.take();
+    try {
+      const res = await withSlot(() =>
+        fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jsonrpc: "2.0", id: method, method, params }),
+          cache: "no-store",
+        }),
+      );
+      lastStatus = res.status;
+      if (res.status === 429) throw new RateLimited();
+      if (!res.ok) {
+        if (RETRYABLE.has(res.status)) throw new Error(`HTTP ${res.status}`);
+        throw new HttpError(
+          502,
+          res.status === 401 || res.status === 403
+            ? `Helius rejected the API key (HTTP ${res.status}). Check HELIUS_API_KEY and that your plan includes ${method}.`
+            : `Helius returned HTTP ${res.status} for ${method}.`,
+        );
+      }
+      const json = await res.json();
+      if (json.error) {
+        if (json.error.code === 429 || json.error.code === -32005) throw new RateLimited();
+        throw new HttpError(502, `Helius ${method} failed: ${json.error.message ?? "unknown error"}`);
+      }
+      return json.result as T;
+    } catch (err) {
+      if (err instanceof HttpError) throw err; // not retryable
+      const limited = err instanceof RateLimited;
+      if (limited) lastStatus = 429;
+      if (attempt === MAX_ATTEMPTS) break;
+      const wait = delay * (0.75 + Math.random() * 0.5);
+      if (limited) pacer.pause(wait);
+      await sleep(wait);
+      delay = Math.min(delay * 2, MAX_DELAY_MS);
+    }
+  }
+
+  if (lastStatus === 429) {
+    throw new HttpError(
+      503,
+      "The blockchain data provider is busy right now. Try again in a minute.",
+      "If this keeps happening, lower HELIUS_RPS or move to a higher Helius plan.",
+    );
+  }
+  throw new HttpError(502, `Couldn't reach Helius for ${method} after ${MAX_ATTEMPTS} attempts.`);
 }
 
 export interface HistoryOptions {
@@ -91,7 +145,7 @@ export interface AssetInfo {
 export async function getAsset(mint: string): Promise<AssetInfo | null> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const a: any = await rpc("getAsset", { id: mint });
+    const a: any = await rpc("getAsset", { id: mint }, "das");
     if (!a) return null;
     const decimals: number | undefined = a.token_info?.decimals;
     const rawSupply: number | undefined = a.token_info?.supply;

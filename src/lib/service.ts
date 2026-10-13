@@ -24,7 +24,12 @@ export function getLaunch(mint: string, ip: string) {
 
 export async function getEarlyWallets(mint: string, ip: string) {
   const { value: launch } = await getLaunch(mint, ip);
-  return cached(`${V}:wallets:${mint}`, () => analyzeEarlyWallets(launch), () => 120, () => rateLimit(ip));
+  return cached(
+    `${V}:wallets:${mint}`,
+    () => analyzeEarlyWallets(launch),
+    (w) => (w.incompleteWallets > 0 ? 15 : 120), // gaps get retried soon
+    () => rateLimit(ip),
+  );
 }
 
 export function getWalletProfile(wallet: string, ip: string) {

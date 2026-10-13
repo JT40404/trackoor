@@ -62,13 +62,24 @@ async function tokenPosition(wallet: string, launch: LaunchAnalysis): Promise<Po
   return pos;
 }
 
-async function analyzeOne(b: EarlyBuyer, launch: LaunchAnalysis): Promise<EarlyWalletDetail> {
+async function analyzeOne(
+  b: EarlyBuyer,
+  launch: LaunchAnalysis,
+  onError: (e: unknown) => void,
+): Promise<EarlyWalletDetail> {
+  let incomplete = false;
+  const fail = <T,>(fallback: T) => (e: unknown) => {
+    incomplete = true;
+    onError(e);
+    return fallback;
+  };
   const [funder, seen, position] = await Promise.all([
-    findFunder(b.wallet, launch).catch(() => null),
-    firstSeen(b.wallet).catch(() => null),
-    tokenPosition(b.wallet, launch),
+    findFunder(b.wallet, launch).catch(fail(null)),
+    firstSeen(b.wallet).catch(fail(null)),
+    tokenPosition(b.wallet, launch).catch(fail(computePosition([]))),
   ]);
   return {
+    incomplete,
     wallet: b.wallet,
     funder,
     firstSeen: seen,
@@ -210,7 +221,13 @@ function walletSignals(details: EarlyWalletDetail[], clusters: Cluster[], launch
 }
 
 export async function analyzeEarlyWallets(launch: LaunchAnalysis): Promise<WalletsAnalysis> {
-  const details = await Promise.all(launch.earlyBuyers.map((b) => analyzeOne(b, launch)));
+  let lastError: unknown = null;
+  const details = await Promise.all(
+    launch.earlyBuyers.map((b) => analyzeOne(b, launch, (e) => (lastError = e))),
+  );
+  const incompleteWallets = details.filter((d) => d.incomplete).length;
+  // If nothing came back at all, surface the real error instead of an empty result.
+  if (details.length && incompleteWallets === details.length && lastError) throw lastError;
   const clusters = buildClusters(details, launch);
   const signals = walletSignals(details, clusters, launch);
   // Keep responses small: very active wallets can have hundreds of events on one token.
@@ -223,6 +240,7 @@ export async function analyzeEarlyWallets(launch: LaunchAnalysis): Promise<Walle
     wallets: details,
     clusters,
     signals,
+    incompleteWallets,
     generatedAt: Math.floor(Date.now() / 1000),
   };
 }

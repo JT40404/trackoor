@@ -122,6 +122,13 @@ export default function TokenView({ ca }: { ca: string }) {
             </span>
             {wallets.status === "loading" && <span className="muted"> Funding and holding checks are still running, so this may go up.</span>}
             {wallets.status === "error" && <span className="muted"> Funding checks failed: {wallets.error}</span>}
+            {w && w.incompleteWallets > 0 && (
+              <span className="muted">
+                {" "}
+                {w.incompleteWallets} of {w.wallets.length} wallets couldn&apos;t be fully checked because the data
+                provider was busy. Reload in a minute to fill them in.
+              </span>
+            )}
           </p>
         </div>
       </section>
@@ -266,6 +273,11 @@ function BuyersTable({
                     <span className="wallet-cell">
                       <span className="swatch" style={{ background: color ?? "transparent" }} aria-hidden />
                       <Addr address={b.wallet} href={`/wallet/${b.wallet}`} />
+                      {d?.incomplete && (
+                        <span className="tag" title="Some lookups for this wallet failed. Reload to retry.">
+                          Partial
+                        </span>
+                      )}
                     </span>
                   </td>
                   <td>

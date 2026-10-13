@@ -11,7 +11,11 @@ export const config = {
   /** How many distinct early buyers to profile (funding, positions). Each costs ~3 RPC calls. */
   earlyBuyerLimit: num(process.env.EARLY_BUYER_LIMIT, 30, 100),
   /** Max simultaneous Helius requests per serverless instance. */
-  heliusConcurrency: num(process.env.HELIUS_CONCURRENCY, 8, 50),
+  heliusConcurrency: num(process.env.HELIUS_CONCURRENCY, 6, 50),
+  /** Max Helius RPC requests per second per instance. Keep below your plan's limit. */
+  heliusRps: num(process.env.HELIUS_RPS, 10, 500),
+  /** Max DAS requests (getAsset) per second per instance. DAS has a lower plan limit than RPC. */
+  heliusDasRps: num(process.env.HELIUS_DAS_RPS, 4, 100),
   /** Fresh analyses (cache misses) allowed per IP per minute. */
   rateLimitPerMinute: num(process.env.RATE_LIMIT_PER_MINUTE, 20),
 

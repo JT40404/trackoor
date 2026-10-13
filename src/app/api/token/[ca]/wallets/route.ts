@@ -13,6 +13,6 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ ca: string 
     const { ca } = await ctx.params;
     if (!isValidAddress(ca)) throw new HttpError(400, "That isn't a valid Solana address.");
     const { value } = await getEarlyWallets(ca, clientIp(req));
-    return ok(value, { sMaxAge: 60, swr: 300 });
+    return ok(value, value.incompleteWallets > 0 ? undefined : { sMaxAge: 60, swr: 300 });
   });
 }

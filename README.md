@@ -82,7 +82,9 @@ Bump `V` in `src/lib/service.ts` to invalidate everything after changing analysi
 | `UPSTASH_REDIS_REST_URL` / `_TOKEN` | | Shared cache + rate limit |
 | `EARLY_BUYER_LIMIT` | 30 | Early buyers to profile. Each costs ~3 calls |
 | `LAUNCH_TX_LIMIT` | 300 | Earliest mint transactions to scan (max 1000) |
-| `HELIUS_CONCURRENCY` | 8 | Parallel Helius requests per instance |
+| `HELIUS_CONCURRENCY` | 6 | Parallel Helius requests per instance |
+| `HELIUS_RPS` | 10 | RPC requests per second per instance. Keep under your plan's limit |
+| `HELIUS_DAS_RPS` | 4 | `getAsset` requests per second per instance |
 | `RATE_LIMIT_PER_MINUTE` | 20 | Fresh analyses per IP per minute |
 
 Exchange hot wallets in `src/lib/solana/constants.ts` (`KNOWN_FUNDERS`) are excluded from clustering so that unrelated people withdrawing from the same exchange aren't linked. Verify and extend that list; it's the biggest lever on false positives.

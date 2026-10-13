@@ -118,6 +118,8 @@ export interface EarlyWalletDetail {
   position: Position;
   remainingPctSupply: number;
   clusterId: number | null;
+  /** True when one of this wallet's lookups failed (usually a rate limit), so its data is incomplete. */
+  incomplete?: boolean;
 }
 
 export interface Cluster {
@@ -135,6 +137,8 @@ export interface WalletsAnalysis {
   wallets: EarlyWalletDetail[];
   clusters: Cluster[];
   signals: Signal[];
+  /** How many wallets have incomplete data. Results with gaps are cached briefly so a reload can fill them in. */
+  incompleteWallets: number;
   generatedAt: number;
 }
 
