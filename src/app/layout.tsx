@@ -36,6 +36,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <span className="wordmark-mark" aria-hidden />
               [placeholder]
             </Link>
+            <nav className="site-nav" aria-label="Main">
+              <Link href="/smart">Smart wallets</Link>
+            </nav>
             <div className="header-search">
               <SearchBox compact />
             </div>

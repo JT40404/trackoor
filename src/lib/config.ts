@@ -17,7 +17,7 @@ export const config = {
   /** Max DAS requests (getAsset) per second per instance. DAS has a lower plan limit than RPC. */
   heliusDasRps: num(process.env.HELIUS_DAS_RPS, 4, 100),
   /** Fresh analyses (cache misses) allowed per IP per minute. */
-  rateLimitPerMinute: num(process.env.RATE_LIMIT_PER_MINUTE, 20),
+  rateLimitPerMinute: num(process.env.RATE_LIMIT_PER_MINUTE, 30),
 
   /** Transactions to scan backwards from launch when looking for a wallet's funder. */
   fundingLookback: 40,
@@ -29,6 +29,10 @@ export const config = {
   /** Pages/page size for the cross-token wallet profile. */
   profilePageSize: 250,
   profileMaxPages: 2,
+  /** Recent transactions scanned per wallet when rating early buyers as smart / not. */
+  smartTxLimit: num(process.env.SMART_TX_LIMIT, 150, 1000),
+  /** Max distinct funders traced one more hop back (each costs one call). */
+  secondHopLimit: num(process.env.SECOND_HOP_LIMIT, 12, 50),
   /** Launch-strip width in slots after creation. */
   slotStripWidth: 12,
 };

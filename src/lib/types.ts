@@ -132,13 +132,88 @@ export interface Cluster {
   sol: number;
 }
 
+/** A wallet that sent SOL to one or more early buyers before launch. */
+export interface FunderNode {
+  address: string;
+  label?: string;
+  /** Early buyers this address funded. */
+  wallets: string[];
+  /** SOL it sent to those wallets (the inflow we traced for each). */
+  sol: number;
+  pctSupply: number;
+  /** Where this funder itself got SOL before launch (second hop). */
+  parent: { address: string; label?: string; sol: number } | null;
+  /** Other launches (searched on this site) where it also funded early buyers. */
+  otherLaunches: number;
+  otherMints: string[];
+  clusterId: number | null;
+  isExchange: boolean;
+}
+
 export interface WalletsAnalysis {
   mint: string;
   wallets: EarlyWalletDetail[];
+  funders: FunderNode[];
   clusters: Cluster[];
   signals: Signal[];
   /** How many wallets have incomplete data. Results with gaps are cached briefly so a reload can fill them in. */
   incompleteWallets: number;
+  generatedAt: number;
+}
+
+export type TraderLabel = "smart" | "flipper" | "bot" | "losing" | "unproven";
+
+export interface TraderStats {
+  closedPositions: number;
+  tokensTraded: number;
+  winRate: number | null;
+  realizedPnlSol: number;
+  medianHoldSec: number | null;
+  avgBuySol: number | null;
+  txsScanned: number;
+}
+
+export interface TraderRating {
+  label: TraderLabel;
+  /** 0-100, null when there isn't enough history to judge. */
+  score: number | null;
+  reasons: string[];
+}
+
+export interface SmartWallet {
+  wallet: string;
+  stats: TraderStats | null;
+  rating: TraderRating;
+  incomplete?: boolean;
+}
+
+export interface SmartAnalysis {
+  mint: string;
+  wallets: SmartWallet[];
+  incompleteWallets: number;
+  generatedAt: number;
+}
+
+export interface LeaderboardWallet {
+  wallet: string;
+  rating: TraderRating;
+  stats: TraderStats;
+  mints: string[];
+  lastSeen: number;
+}
+
+export interface LeaderboardFunder {
+  address: string;
+  label?: string;
+  launches: { mint: string; wallets: number; time: number }[];
+  walletsFunded: number;
+  lastSeen: number;
+}
+
+export interface Leaderboard {
+  smart: LeaderboardWallet[];
+  funders: LeaderboardFunder[];
+  persistent: boolean;
   generatedAt: number;
 }
 
@@ -147,10 +222,20 @@ export interface TokenPosition extends Omit<Position, "events"> {
   venue: "pump" | "other" | "mixed";
 }
 
+export interface FundingEdge {
+  address: string;
+  label?: string;
+  sol: number;
+  count: number;
+}
+
 export interface WalletProfile {
   wallet: string;
   firstSeen: number | null;
   tokens: TokenPosition[];
+  funding: { sources: FundingEdge[]; recipients: FundingEdge[] };
+  /** Launches (searched on this site) where this wallet funded early buyers. */
+  fundedLaunches: { mint: string; wallets: number; time: number }[];
   stats: {
     tokensTraded: number;
     closedPositions: number;

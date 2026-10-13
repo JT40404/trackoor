@@ -2,9 +2,20 @@ import { config } from "../config";
 import { computePosition } from "../fifo";
 import { deriveAta } from "../solana/address";
 import { KNOWN_FUNDERS, LAMPORTS_PER_SOL } from "../solana/constants";
+import { getFunders, recordFunding } from "../registry";
 import { getHistory } from "../solana/helius";
 import { extractActivities, solInflows, sortActivities, txSignature } from "../solana/tx";
-import type { Cluster, EarlyBuyer, EarlyWalletDetail, Funder, LaunchAnalysis, Position, Signal, WalletsAnalysis } from "../types";
+import type {
+  Cluster,
+  EarlyBuyer,
+  EarlyWalletDetail,
+  Funder,
+  FunderNode,
+  LaunchAnalysis,
+  Position,
+  Signal,
+  WalletsAnalysis,
+} from "../types";
 
 const pct = (n: number) => `${n.toFixed(n < 1 ? 2 : 1)}%`;
 
@@ -91,7 +102,7 @@ async function analyzeOne(
 }
 
 /** Union-find over early wallets + creator, linked by funding edges (exchanges excluded). */
-function buildClusters(details: EarlyWalletDetail[], launch: LaunchAnalysis): Cluster[] {
+function buildClusters(details: EarlyWalletDetail[], launch: LaunchAnalysis, parents: Map<string, Funder | null>): Cluster[] {
   const parent = new Map<string, string>();
   const find = (x: string): string => {
     if (!parent.has(x)) parent.set(x, x);
@@ -107,6 +118,10 @@ function buildClusters(details: EarlyWalletDetail[], launch: LaunchAnalysis): Cl
   for (const d of details) {
     find(d.wallet);
     if (d.funder && !KNOWN_FUNDERS[d.funder.address]) union(d.wallet, d.funder.address);
+  }
+  // Second hop: funders that were themselves funded from the same (non-exchange) source.
+  for (const [funder, parent] of parents) {
+    if (parent && !KNOWN_FUNDERS[parent.address]) union(funder, parent.address);
   }
 
   const groups = new Map<string, string[]>();
@@ -220,6 +235,104 @@ function walletSignals(details: EarlyWalletDetail[], clusters: Cluster[], launch
   return signals;
 }
 
+/** Group early wallets by direct funder, trace each funder one hop further, and check the cross-launch registry. */
+async function buildFunders(
+  details: EarlyWalletDetail[],
+  launch: LaunchAnalysis,
+): Promise<{ nodes: FunderNode[]; parents: Map<string, Funder | null> }> {
+  const pct = new Map(launch.earlyBuyers.map((b) => [b.wallet, b.pctSupply]));
+  const direct = new Map<string, FunderNode>();
+  for (const d of details) {
+    if (!d.funder) continue;
+    const a = d.funder.address;
+    const node =
+      direct.get(a) ??
+      ({
+        address: a,
+        label: d.funder.label,
+        wallets: [],
+        sol: 0,
+        pctSupply: 0,
+        parent: null,
+        otherLaunches: 0,
+        otherMints: [],
+        clusterId: null,
+        isExchange: Boolean(KNOWN_FUNDERS[a]),
+      } as FunderNode);
+    node.wallets.push(d.wallet);
+    node.sol += d.funder.sol;
+    node.pctSupply += pct.get(d.wallet) ?? 0;
+    direct.set(a, node);
+  }
+
+  // Trace the most important non-exchange funders one more hop back.
+  const toTrace = [...direct.values()]
+    .filter((n) => !n.isExchange)
+    .sort((a, b) => b.wallets.length - a.wallets.length || b.pctSupply - a.pctSupply)
+    .slice(0, config.secondHopLimit)
+    .map((n) => n.address);
+  const parents = new Map<string, Funder | null>();
+  await Promise.all(
+    toTrace.map((a) =>
+      findFunder(a, launch)
+        .then((f) => parents.set(a, f))
+        .catch(() => {}),
+    ),
+  );
+  for (const [a, p] of parents) {
+    const n = direct.get(a);
+    if (n && p) n.parent = { address: p.address, label: p.label, sol: p.sol };
+  }
+
+  // Cross-launch registry: has this funder bankrolled early buyers elsewhere?
+  const tracked = [...direct.values()].filter((n) => !n.isExchange);
+  const prev = await getFunders(tracked.map((n) => n.address)).catch(() => new Map());
+  for (const n of tracked) {
+    const others = (prev.get(n.address)?.launches ?? []).filter((l: { mint: string }) => l.mint !== launch.mint);
+    n.otherLaunches = others.length;
+    n.otherMints = others.slice(0, 5).map((l: { mint: string }) => l.mint);
+  }
+  await Promise.all(
+    tracked.map((n) => recordFunding(n.address, n.label, launch.mint, n.wallets.length, prev.get(n.address) ?? null).catch(() => {})),
+  );
+
+  const nodes = [...direct.values()].sort(
+    (a, b) => Number(a.isExchange) - Number(b.isExchange) || b.wallets.length - a.wallets.length || b.pctSupply - a.pctSupply,
+  );
+  return { nodes, parents };
+}
+
+function fundingSignals(nodes: FunderNode[]): Signal[] {
+  const signals: Signal[] = [];
+  for (const n of nodes) {
+    if (n.isExchange || !n.otherLaunches) continue;
+    signals.push({
+      id: `repeat-funder-${n.address}`,
+      severity: n.otherLaunches >= 2 ? "high" : "medium",
+      title: `A funder here also funded early buyers in ${n.otherLaunches} other launch${n.otherLaunches > 1 ? "es" : ""}`,
+      detail: `${n.address.slice(0, 4)}…${n.address.slice(-4)} sent SOL to ${n.wallets.length} early wallet${n.wallets.length > 1 ? "s" : ""} here. Repeat bankrolling of first-block buyers is typical of serial bundlers. Counts only launches looked up on this site.`,
+      wallets: n.wallets,
+    });
+  }
+  const byParent = new Map<string, FunderNode[]>();
+  for (const n of nodes) {
+    if (!n.parent || KNOWN_FUNDERS[n.parent.address]) continue;
+    byParent.set(n.parent.address, [...(byParent.get(n.parent.address) ?? []), n]);
+  }
+  for (const [parent, kids] of byParent) {
+    if (kids.length < 2) continue;
+    const wallets = kids.flatMap((k) => k.wallets);
+    signals.push({
+      id: `upstream-${parent}`,
+      severity: wallets.length >= 4 ? "high" : "medium",
+      title: `${kids.length} different funders trace back to one source`,
+      detail: `${wallets.length} early wallets look independently funded, but their funders were all paid by ${parent.slice(0, 4)}…${parent.slice(-4)} before launch.`,
+      wallets,
+    });
+  }
+  return signals;
+}
+
 export async function analyzeEarlyWallets(launch: LaunchAnalysis): Promise<WalletsAnalysis> {
   let lastError: unknown = null;
   const details = await Promise.all(
@@ -228,8 +341,11 @@ export async function analyzeEarlyWallets(launch: LaunchAnalysis): Promise<Walle
   const incompleteWallets = details.filter((d) => d.incomplete).length;
   // If nothing came back at all, surface the real error instead of an empty result.
   if (details.length && incompleteWallets === details.length && lastError) throw lastError;
-  const clusters = buildClusters(details, launch);
-  const signals = walletSignals(details, clusters, launch);
+
+  const { nodes, parents } = await buildFunders(details, launch);
+  const clusters = buildClusters(details, launch, parents);
+  for (const n of nodes) n.clusterId = details.find((d) => d.wallet === n.wallets[0])?.clusterId ?? null;
+  const signals = [...walletSignals(details, clusters, launch), ...fundingSignals(nodes)];
   // Keep responses small: very active wallets can have hundreds of events on one token.
   for (const d of details) {
     const ev = d.position.events;
@@ -238,6 +354,7 @@ export async function analyzeEarlyWallets(launch: LaunchAnalysis): Promise<Walle
   return {
     mint: launch.mint,
     wallets: details,
+    funders: nodes,
     clusters,
     signals,
     incompleteWallets,

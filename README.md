@@ -5,7 +5,10 @@ Paste a pump.fun contract address and see:
 - **Bundled buys**: wallets that landed in the creation slot, bought for several wallets in one transaction, bought identical amounts, or paid Jito tips alongside the deploy.
 - **Funding links**: where each early wallet got its SOL, grouped into clusters (including wallets tied back to the creator).
 - **Hold times and positions**: for each early buyer, whether they're holding, sold, or moved tokens to another wallet, the token-weighted median hold time, and realized PnL.
-- **Wallet history**: any wallet's recent trades across tokens, with win rate, realized PnL and median hold.
+- **Smart money**: every early buyer is rated from their recent trades (Smart, Profitable flipper, Bot-like, Losing, Unproven), so you can see whether proven wallets got in early and whether they're still holding.
+- **Shared funding**: funders are traced one extra hop back, so wallets that look independent but trace to one source get grouped. Funders that bankrolled early buyers in other launches are flagged.
+- **Smart wallets page** (`/smart`): a running leaderboard of profitable wallets and repeat funders, built from every lookup on the site.
+- **Wallet history**: any wallet's recent trades across tokens, with win rate, realized PnL, median hold, rating, and where its SOL came from and went.
 
 Everything is computed **on demand** when someone searches. There's no background indexer and no database to run. Results are cached, so a popular token costs the same as a quiet one.
 
@@ -48,6 +51,11 @@ Without Redis the app still works, using a per-instance in-memory cache.
                        for this mint, FIFO-matched into hold times and PnL
                     └─ union-find clusters over funding edges (exchanges excluded)
 
+              ──►  GET /api/token/[ca]/smart      trader ratings (1 call per wallet, cached 6h per wallet)
+                    └─ each early buyer's last ~150 transactions → closed positions,
+                       win rate, realized PnL, median hold → rating (src/lib/smart.ts)
+                    └─ smart / profitable wallets are added to the leaderboard
+
 /wallet/[addr] ──► GET /api/wallet/[addr]         profile (~3 calls)
                     └─ last ~500 transactions incl. token-account activity
                     └─ per-token FIFO positions + aggregate stats
@@ -60,6 +68,24 @@ The token page loads the launch analysis first (fast), then fills in funding and
 - **pump.fun bonding-curve trades** are read from the program's own `TradeEvent` (from both self-CPI event instructions and `Program data:` logs, scoped to the pump.fun program). These give exact SOL and token amounts.
 - **Trades elsewhere** (PumpSwap after graduation, Jupiter, Raydium, bots) are inferred from balance changes: a signer whose token balance went up while their SOL/WSOL went down by more than 0.003 SOL bought, and vice versa.
 - **Anything else** that moves tokens is a transfer. Transfers close lots for hold-time purposes but don't count toward PnL, and the counterparty is recorded so consolidation into one wallet can be flagged.
+
+### Smart-wallet rules
+
+All thresholds live in `SMART_RULES` in `src/lib/smart.ts`:
+
+| Label | Rule (from recent closed positions) |
+| --- | --- |
+| Unproven | Fewer than 5 closed positions |
+| Losing | Realized PnL ≤ 0, or win rate under 35% |
+| Bot-like | Profitable, but median hold under 60s across 10+ trades |
+| Smart | Win rate ≥ 50%, ≥ 1 SOL realized, median hold ≥ 30 min |
+| Profitable flipper | Profitable but doesn't meet the Smart bar |
+
+The 0–100 score weighs win rate (40), realized profit on a log scale (30), hold time (20) and sample size (10). Ratings reflect a wallet's recent history only, not its lifetime.
+
+### Leaderboard and repeat funders
+
+The `/smart` page and the "Seen in N other launches" flags come from a registry in `src/lib/registry.ts`. It's built up from every lookup, so it starts empty and grows as people use the site. It needs Upstash Redis to persist; without it, it lives in memory per server instance and resets on each deploy.
 
 ### Caching
 
@@ -85,7 +111,9 @@ Bump `V` in `src/lib/service.ts` to invalidate everything after changing analysi
 | `HELIUS_CONCURRENCY` | 6 | Parallel Helius requests per instance |
 | `HELIUS_RPS` | 10 | RPC requests per second per instance. Keep under your plan's limit |
 | `HELIUS_DAS_RPS` | 4 | `getAsset` requests per second per instance |
-| `RATE_LIMIT_PER_MINUTE` | 20 | Fresh analyses per IP per minute |
+| `RATE_LIMIT_PER_MINUTE` | 30 | Fresh analyses per IP per minute (a token page uses up to 3) |
+| `SMART_TX_LIMIT` | 150 | Recent transactions scanned per wallet when rating traders |
+| `SECOND_HOP_LIMIT` | 12 | Funders traced one more hop back per token |
 
 Exchange hot wallets in `src/lib/solana/constants.ts` (`KNOWN_FUNDERS`) are excluded from clustering so that unrelated people withdrawing from the same exchange aren't linked. Verify and extend that list; it's the biggest lever on false positives.
 

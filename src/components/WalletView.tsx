@@ -4,9 +4,11 @@ import Link from "next/link";
 import Addr from "./Addr";
 import Loading from "./Loading";
 import SectionHead from "./SectionHead";
+import TraderBadge from "./TraderBadge";
+import { classifyTrader, TRADER_LABELS } from "@/lib/smart";
 import { useApi } from "./useApi";
 import { fmtAgo, fmtDate, fmtDuration, fmtPct, fmtSol, short } from "@/lib/format";
-import type { PositionStatus, WalletProfile } from "@/lib/types";
+import type { FundingEdge, PositionStatus, WalletProfile } from "@/lib/types";
 
 const STATUS: Record<PositionStatus, string> = {
   holding: "Holding",
@@ -41,6 +43,15 @@ export default function WalletView({ address }: { address: string }) {
 
   const p = state.data;
   const s = p.stats;
+  const rating = classifyTrader({
+    closedPositions: s.closedPositions,
+    tokensTraded: s.tokensTraded,
+    winRate: s.winRate,
+    realizedPnlSol: s.realizedPnlSol,
+    medianHoldSec: s.medianHoldSec,
+    avgBuySol: s.avgBuySol,
+    txsScanned: p.txsScanned,
+  });
   return (
     <article className="wallet">
       <header className="token-head">
@@ -62,6 +73,18 @@ export default function WalletView({ address }: { address: string }) {
           </div>
         </dl>
       </header>
+
+      <section className={`verdict verdict-trader-${rating.label}`}>
+        <span className="verdict-mark" aria-hidden />
+        <div>
+          <p className="verdict-text">
+            {TRADER_LABELS[rating.label]}
+            {rating.score !== null && <span className="verdict-score"> {rating.score}/100</span>}
+          </p>
+          <p className="verdict-sub muted">{rating.reasons.join(". ")}.</p>
+        </div>
+        <TraderBadge rating={rating} showScore={false} />
+      </section>
 
       <section className="sec" aria-labelledby="summary-h">
       <SectionHead n={1} id="summary-h" title="Track record" />
@@ -102,8 +125,36 @@ export default function WalletView({ address }: { address: string }) {
       </p>
       </section>
 
+      <section className="sec" aria-labelledby="funding-h">
+        <SectionHead
+          n={2}
+          id="funding-h"
+          title="Funding"
+          note="SOL transfers of 0.01 or more in the scanned history. Swaps and fees paid through programs aren't included."
+        />
+        <div className="split split-flat">
+          <EdgeList title="Received SOL from" edges={p.funding.sources} />
+          <EdgeList title="Sent SOL to" edges={p.funding.recipients} />
+        </div>
+        {p.fundedLaunches.length > 0 && (
+          <div className="repeat-box">
+            <span className="mono-label neg">
+              Funded early buyers in {p.fundedLaunches.length} launch{p.fundedLaunches.length > 1 ? "es" : ""}
+            </span>
+            <p>
+              {p.fundedLaunches.map((l, i) => (
+                <span key={l.mint}>
+                  {i > 0 && ", "}
+                  <Link href={`/token/${l.mint}`}>{short(l.mint)}</Link> <span className="muted">({l.wallets} wallets)</span>
+                </span>
+              ))}
+            </p>
+          </div>
+        )}
+      </section>
+
       <section className="sec" aria-labelledby="positions-h">
-        <SectionHead n={2} id="positions-h" title="Positions" />
+        <SectionHead n={3} id="positions-h" title="Positions" />
         {p.tokens.length === 0 ? (
           <p className="muted">No token trades found in the scanned history.</p>
         ) : (
@@ -155,5 +206,27 @@ export default function WalletView({ address }: { address: string }) {
         )}
       </section>
     </article>
+  );
+}
+
+function EdgeList({ title, edges }: { title: string; edges: FundingEdge[] }) {
+  return (
+    <div className="edges">
+      <p className="mono-label muted">{title}</p>
+      {edges.length === 0 ? (
+        <p className="muted">None found.</p>
+      ) : (
+        <ul>
+          {edges.map((e) => (
+            <li key={e.address}>
+              {e.label ? <span className="tag">{e.label}</span> : <Addr address={e.address} href={`/wallet/${e.address}`} />}
+              <span className="edges-amt">
+                {fmtSol(e.sol)} SOL <span className="muted">({e.count}x)</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }

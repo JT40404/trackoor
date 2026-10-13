@@ -169,7 +169,7 @@ h2 {
 }
 .site-header {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto auto 1fr;
   border-bottom: 1px solid var(--line);
   min-height: 64px;
 }
@@ -985,6 +985,260 @@ table.data {
 }
 
 /* =========================================================
+   Nav
+========================================================= */
+.site-nav {
+  display: flex;
+  border-right: 1px solid var(--line);
+}
+.site-nav a {
+  display: flex;
+  align-items: center;
+  padding: 0 var(--pad);
+  font: 500 0.72rem var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+}
+.site-nav a:hover {
+  background: var(--ink);
+  color: var(--paper);
+}
+.page-head {
+  padding: clamp(1.5rem, 4vw, 2.75rem) var(--pad);
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 0.75rem;
+}
+.page-head h1 {
+  font-size: clamp(2rem, 5vw, 3.6rem);
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+}
+.page-head p {
+  max-width: 80ch;
+}
+
+/* =========================================================
+   Trader ratings
+========================================================= */
+.trader {
+  display: inline-flex;
+  align-items: stretch;
+  font: 500 0.64rem var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--line-soft);
+  color: var(--ink-2);
+  white-space: nowrap;
+  cursor: help;
+}
+.trader,
+.trader-score {
+  padding: 0.12rem 0.4rem;
+}
+.trader-score {
+  margin: -0.12rem -0.4rem -0.12rem 0.4rem;
+  border-left: 1px dashed currentColor;
+}
+.trader-smart {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+}
+.trader-flipper {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.trader-bot {
+  border-color: var(--ink-2);
+  color: var(--ink);
+}
+.trader-losing {
+  border-color: var(--brand);
+  color: var(--brand-text);
+}
+.trader-unproven {
+  border-style: dashed;
+  color: var(--ink-3);
+}
+.data tbody tr.row-smart td:first-child {
+  box-shadow: inset 3px 0 0 var(--ok);
+}
+.data tbody tr.row-flipper td:first-child {
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--ok) 45%, transparent);
+}
+.data tbody tr.row-smart {
+  background: color-mix(in srgb, var(--ok) 6%, transparent);
+}
+
+.smart-counts,
+.fmap-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  margin: 0 0 1.25rem;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+.smart-counts > div,
+.fmap-summary > div {
+  padding: 0.6rem 0.75rem;
+}
+.smart-counts > div + div,
+.fmap-summary > div + div {
+  border-left: 1px dashed var(--line-soft);
+}
+.smart-counts dt,
+.fmap-summary dt {
+  color: var(--ink-2);
+}
+.smart-counts dd,
+.fmap-summary dd {
+  margin: 0.2rem 0 0;
+  font-size: 1.5rem;
+  font-weight: 500;
+}
+.smart-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.smart-list li {
+  padding: 0.7rem 0;
+  border-bottom: 1px dashed var(--line-soft);
+}
+.smart-list li:last-child {
+  border-bottom: 0;
+}
+.smart-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+.smart-reasons {
+  font-size: 0.82rem;
+  margin-top: 0.3rem;
+}
+
+/* =========================================================
+   Funding map
+========================================================= */
+.fmap-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.9rem;
+}
+.fnode {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  padding: 0.8rem 0.9rem;
+}
+.fnode-parent {
+  font-size: 0.85rem;
+  padding-bottom: 0.55rem;
+  margin-bottom: 0.55rem;
+  border-bottom: 1px dashed var(--line-soft);
+}
+.fnode-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.fnode-head .swatch {
+  margin-top: 0;
+}
+.fnode-stats {
+  margin-left: auto;
+}
+.fnode-kids {
+  list-style: none;
+  margin: 0.6rem 0 0 5px;
+  padding: 0.1rem 0 0 1.1rem;
+  border-left: 1px dashed var(--ink-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+.fnode-kids li {
+  position: relative;
+}
+.fnode-kids li:first-child::before {
+  content: "";
+  position: absolute;
+  left: -1.1rem;
+  top: 50%;
+  width: 0.9rem;
+  border-top: 1px dashed var(--ink-3);
+}
+.fnode-other {
+  margin-top: 0.6rem;
+}
+
+/* =========================================================
+   Wallet funding + rating
+========================================================= */
+.split-flat {
+  grid-template-columns: 1fr 1fr;
+}
+.split-flat > .edges + .edges {
+  border-left: 1px dashed var(--line-soft);
+  padding-left: 1.25rem;
+}
+.split-flat > .edges:first-child {
+  padding-right: 1.25rem;
+}
+.edges ul {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+}
+.edges li {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px dashed var(--line-soft);
+}
+.edges-amt {
+  white-space: nowrap;
+  font-size: 0.88rem;
+}
+.repeat-box {
+  margin-top: 1.25rem;
+  padding: 0.8rem 0.9rem;
+  border: 1px solid var(--brand);
+  display: grid;
+  gap: 0.35rem;
+}
+.verdict-score {
+  font-family: var(--mono);
+  font-size: 0.55em;
+  color: var(--ink-2);
+  letter-spacing: 0;
+}
+.verdict > .trader {
+  margin-left: auto;
+  align-self: center;
+}
+.verdict-trader-smart .verdict-mark {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+.verdict-trader-flipper .verdict-mark {
+  border: 2px solid var(--ok);
+}
+.verdict-trader-losing .verdict-mark {
+  border: 2px solid var(--brand);
+}
+.verdict-trader-unproven .verdict-mark {
+  border-style: dashed;
+}
+
+/* =========================================================
    Responsive
 ========================================================= */
 @media (max-width: 900px) {
@@ -1001,6 +1255,9 @@ table.data {
   .split > .sec + .sec {
     border-left: 0;
   }
+  .split > .sec:first-child:not(:only-child) {
+    border-bottom: 1px solid var(--line);
+  }
   .checks {
     grid-template-columns: 1fr;
   }
@@ -1016,7 +1273,36 @@ table.data {
 }
 @media (max-width: 640px) {
   .site-header {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr auto;
+  }
+  .header-search {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--line);
+  }
+  .site-nav {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .smart-counts,
+  .fmap-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .smart-counts > div:nth-child(3),
+  .fmap-summary > div:nth-child(3) {
+    border-left: 0;
+  }
+  .smart-counts > div:nth-child(n + 3),
+  .fmap-summary > div:nth-child(n + 3) {
+    border-top: 1px dashed var(--line-soft);
+  }
+  .fnode-stats {
+    margin-left: 0;
+    width: 100%;
+  }
+  .split-flat > .edges + .edges {
+    border-left: 0;
+    padding-left: 0;
+    margin-top: 1.25rem;
   }
   .wordmark {
     border-right: 0;

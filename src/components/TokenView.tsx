@@ -3,6 +3,8 @@
 import Link from "next/link";
 import Addr from "./Addr";
 import Frame from "./Frame";
+import FundingMap from "./FundingMap";
+import TraderBadge from "./TraderBadge";
 import Loading from "./Loading";
 import SectionHead from "./SectionHead";
 import SevMark from "./SevMark";
@@ -17,6 +19,8 @@ import type {
   LaunchAnalysis,
   PositionStatus,
   Signal,
+  SmartAnalysis,
+  SmartWallet,
   WalletsAnalysis,
 } from "@/lib/types";
 
@@ -36,6 +40,8 @@ const clusterColor = (id: number | null | undefined, kind?: Cluster["kind"]) =>
 export default function TokenView({ ca }: { ca: string }) {
   const launch = useApi<LaunchAnalysis>(`/api/token/${ca}`);
   const wallets = useApi<WalletsAnalysis>(launch.status === "ready" ? `/api/token/${ca}/wallets` : null);
+  // Rate traders after the funding pass finishes, so the two don't compete for the same rate limit.
+  const smart = useApi<SmartAnalysis>(launch.status === "ready" && wallets.status !== "loading" ? `/api/token/${ca}/smart` : null);
 
   if (launch.status === "loading") {
     return (
@@ -70,6 +76,10 @@ export default function TokenView({ ca }: { ca: string }) {
     if (!d || d.clusterId === null) return undefined;
     return clusterColor(d.clusterId, clusterById.get(d.clusterId)?.kind);
   };
+
+  const sm = smart.status === "ready" ? smart.data : null;
+  const ratings = new Map(sm?.wallets.map((x) => [x.wallet, x]) ?? []);
+  const smartPending = smart.status === "loading";
 
   const signals = sortSignals([...l.signals, ...(w?.signals ?? [])]);
   const { score, verdict, level } = scoreSignals(signals);
@@ -178,47 +188,36 @@ export default function TokenView({ ca }: { ca: string }) {
           )}
         </section>
 
-        <section className="sec" aria-labelledby="clusters-h">
-          <SectionHead n={3} id="clusters-h" title="Linked wallets" />
-          {wallets.status === "loading" && (
-            <p className="mono-label muted">
-              Tracing SOL for the first {l.earlyBuyers.length} buyers <span className="spin" aria-hidden />
-            </p>
-          )}
-          {wallets.status === "error" && <p className="muted">{wallets.error}</p>}
-          {w && !w.clusters.length && (
-            <p className="muted">
-              No shared funders among the first {l.earlyBuyers.length} buyers. Exchange withdrawals don&apos;t count as links.
-            </p>
-          )}
-          {w && w.clusters.length > 0 && (
-            <ul className="clusters">
-              {w.clusters.map((c, i) => (
-                <li key={c.id}>
-                  <span className="swatch" style={{ background: clusterColor(c.id, c.kind) }} aria-hidden />
-                  <div>
-                    <p className="cluster-title">
-                      {c.kind === "creator"
-                        ? "Creator's group"
-                        : `Group ${String.fromCharCode(65 + i - (w.clusters[0].kind === "creator" ? 1 : 0))}`}
-                    </p>
-                    <p className="muted">
-                      {c.wallets.length} wallets, {fmtPct(c.pctSupply)} of supply, {fmtSol(c.sol)} SOL in.
-                    </p>
-                    {c.kind === "shared" && (
-                      <p className="cluster-root">
-                        <span className="mono-label muted">Funder</span> <Addr address={c.root} href={`/wallet/${c.root}`} />
-                      </p>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
+        <section className="sec" aria-labelledby="smart-h">
+          <SectionHead n={3} id="smart-h" title="Smart money" />
+          <SmartPanel state={smart.status} data={sm} details={details} error={smart.status === "error" ? smart.error : null} />
         </section>
       </div>
 
-      <BuyersTable buyers={l.earlyBuyers} details={details} pending={wallets.status === "loading"} colorFor={colorFor} />
+      <section className="sec" aria-labelledby="funding-h">
+        <SectionHead
+          n={4}
+          id="funding-h"
+          title="Funding map"
+          note="Where early buyers got their SOL before launch. Wallets that share a funder, or whose funders share a source, are grouped by color."
+        />
+        {wallets.status === "loading" && (
+          <p className="mono-label muted">
+            Tracing SOL for the first {l.earlyBuyers.length} buyers <span className="spin" aria-hidden />
+          </p>
+        )}
+        {wallets.status === "error" && <p className="muted">{wallets.error}</p>}
+        {w && <FundingMap data={w} creator={l.creator} total={l.earlyBuyers.length} />}
+      </section>
+
+      <BuyersTable
+        buyers={l.earlyBuyers}
+        details={details}
+        ratings={ratings}
+        pending={wallets.status === "loading"}
+        smartPending={smartPending}
+        colorFor={colorFor}
+      />
 
       <p className="fineprint mono-label">
         Based on the first {l.txsScanned} transactions, through slot {l.windowEndSlot.toLocaleString()}. Creation tx{" "}
@@ -233,24 +232,29 @@ export default function TokenView({ ca }: { ca: string }) {
 function BuyersTable({
   buyers,
   details,
+  ratings,
   pending,
+  smartPending,
   colorFor,
 }: {
   buyers: EarlyBuyer[];
   details: Map<string, EarlyWalletDetail>;
+  ratings: Map<string, SmartWallet>;
   pending: boolean;
+  smartPending: boolean;
   colorFor: (w: string) => string | undefined;
 }) {
   const wait = <span className="spin muted" aria-label="Loading" />;
   return (
     <section className="sec" aria-labelledby="buyers-h">
-      <SectionHead n={4} id="buyers-h" title={`First ${buyers.length} buyers`} />
+      <SectionHead n={5} id="buyers-h" title={`First ${buyers.length} buyers`} />
       <div className="table-scroll">
         <table className="data">
           <thead>
             <tr>
               <th scope="col">#</th>
               <th scope="col">Wallet</th>
+              <th scope="col">Trader</th>
               <th scope="col">Entry</th>
               <th scope="col" className="num">SOL in</th>
               <th scope="col" className="num">Supply</th>
@@ -265,9 +269,14 @@ function BuyersTable({
           <tbody>
             {buyers.map((b) => {
               const d = details.get(b.wallet);
+              const r = ratings.get(b.wallet);
               const color = colorFor(b.wallet);
               return (
-                <tr key={b.wallet} id={`w-${b.wallet}`}>
+                <tr
+                  key={b.wallet}
+                  id={`w-${b.wallet}`}
+                  className={r?.rating.label === "smart" ? "row-smart" : r?.rating.label === "flipper" ? "row-flipper" : undefined}
+                >
                   <td className="num muted">{b.rank}</td>
                   <td>
                     <span className="wallet-cell">
@@ -280,6 +289,7 @@ function BuyersTable({
                       )}
                     </span>
                   </td>
+                  <td>{r ? <TraderBadge rating={r.rating} /> : smartPending ? wait : "–"}</td>
                   <td>
                     <a href={solscanTx(b.firstSignature)} target="_blank" rel="noreferrer" className="entry">
                       {b.slotOffset === 0 ? "Create slot" : `+${b.slotOffset} slots`}
@@ -341,9 +351,84 @@ function BuyersTable({
         </table>
       </div>
       <p className="fineprint mono-label">
-        Wallet age is time between the wallet&apos;s first transaction and the launch. Held for is the token-weighted median
+        Trader ratings come from each wallet&apos;s most recent trades. Hover a rating to see why. Wallet age is time between the wallet&apos;s first transaction and the launch. Held for is the token-weighted median
         time from buy to sell or transfer. Realized is in SOL and counts only tokens bought, not received.
       </p>
     </section>
+  );
+}
+
+const STATUS_SHORT: Record<PositionStatus, string> = STATUS;
+
+function SmartPanel({
+  state,
+  data,
+  details,
+  error,
+}: {
+  state: "loading" | "error" | "ready";
+  data: SmartAnalysis | null;
+  details: Map<string, EarlyWalletDetail>;
+  error: string | null;
+}) {
+  if (state === "loading") {
+    return (
+      <p className="mono-label muted">
+        Rating early buyers by their trading history <span className="spin" aria-hidden />
+      </p>
+    );
+  }
+  if (state === "error" || !data) return <p className="muted">{error ?? "Ratings unavailable."}</p>;
+
+  const good = data.wallets
+    .filter((x) => x.rating.label === "smart" || x.rating.label === "flipper")
+    .sort((a, b) => (b.rating.score ?? 0) - (a.rating.score ?? 0));
+  const count = (l: string) => data.wallets.filter((x) => x.rating.label === l).length;
+
+  return (
+    <div className="smart-panel">
+      <dl className="smart-counts">
+        <div>
+          <dt className="mono-label">Smart</dt>
+          <dd className="pos">{count("smart")}</dd>
+        </div>
+        <div>
+          <dt className="mono-label">Flippers</dt>
+          <dd>{count("flipper")}</dd>
+        </div>
+        <div>
+          <dt className="mono-label">Bot-like</dt>
+          <dd>{count("bot")}</dd>
+        </div>
+        <div>
+          <dt className="mono-label">Unproven</dt>
+          <dd className="muted">{count("unproven")}</dd>
+        </div>
+      </dl>
+      {good.length === 0 ? (
+        <p className="muted">No proven profitable wallets among the early buyers.</p>
+      ) : (
+        <ul className="smart-list">
+          {good.slice(0, 8).map((x) => {
+            const d = details.get(x.wallet);
+            return (
+              <li key={x.wallet}>
+                <div className="smart-row">
+                  <TraderBadge rating={x.rating} />
+                  <a href={`#w-${x.wallet}`} className="addr-text">
+                    {short(x.wallet)}
+                  </a>
+                  {d && <span className={`status status-${d.position.status}`}>{STATUS_SHORT[d.position.status]}</span>}
+                </div>
+                <p className="smart-reasons muted">{x.rating.reasons.join("; ")}</p>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {data.incompleteWallets > 0 && (
+        <p className="fineprint mono-label">{data.incompleteWallets} wallets couldn&apos;t be rated yet. Reload in a minute.</p>
+      )}
+    </div>
   );
 }

@@ -90,6 +90,19 @@ export function solInflows(tx: RawTx, wallet: string): { source: string; lamport
   return out;
 }
 
+/** Outgoing SOL transfers from `wallet` in this tx (system program transfers only, Jito tips excluded). */
+export function solOutflows(tx: RawTx, wallet: string): { destination: string; lamports: number }[] {
+  if (tx.meta?.err) return [];
+  const out: { destination: string; lamports: number }[] = [];
+  for (const ix of allInstructions(tx)) {
+    const t = systemTransfer(ix);
+    if (t && t.source === wallet && t.destination !== wallet && !JITO_TIP_ACCOUNTS.has(t.destination)) {
+      out.push({ destination: t.destination, lamports: t.lamports });
+    }
+  }
+  return out;
+}
+
 interface TokenBal {
   owner: string;
   mint: string;

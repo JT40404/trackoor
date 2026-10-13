@@ -1,21 +1,64 @@
 import { config } from "../config";
 import { HttpError } from "../errors";
 import { computePosition } from "../fifo";
+import { getFunder } from "../registry";
+import { KNOWN_FUNDERS, LAMPORTS_PER_SOL } from "../solana/constants";
 import { getHistory } from "../solana/helius";
-import { extractActivities, sortActivities, type Activity } from "../solana/tx";
+import { extractActivities, solInflows, solOutflows, sortActivities, type Activity } from "../solana/tx";
+import type { RawTx } from "../solana/types";
 import { median } from "../stats";
-import type { TokenPosition, WalletProfile } from "../types";
+import type { FundingEdge, TokenPosition, TraderStats, WalletProfile } from "../types";
+
+interface ProfileOptions {
+  pageSize?: number;
+  maxPages?: number;
+  /** Extra call to find the wallet's first-ever transaction. */
+  firstSeen?: boolean;
+}
+
+function topEdges(map: Map<string, { sol: number; count: number }>, limit = 8): FundingEdge[] {
+  return [...map.entries()]
+    .map(([address, v]) => ({ address, label: KNOWN_FUNDERS[address], ...v }))
+    .sort((a, b) => b.sol - a.sol)
+    .slice(0, limit);
+}
+
+function fundingFrom(txs: RawTx[], wallet: string) {
+  const sources = new Map<string, { sol: number; count: number }>();
+  const recipients = new Map<string, { sol: number; count: number }>();
+  for (const tx of txs) {
+    for (const i of solInflows(tx, wallet)) {
+      if (i.lamports < config.minFundingLamports) continue;
+      const e = sources.get(i.source) ?? { sol: 0, count: 0 };
+      e.sol += i.lamports / LAMPORTS_PER_SOL;
+      e.count++;
+      sources.set(i.source, e);
+    }
+    for (const o of solOutflows(tx, wallet)) {
+      if (o.lamports < config.minFundingLamports) continue;
+      const e = recipients.get(o.destination) ?? { sol: 0, count: 0 };
+      e.sol += o.lamports / LAMPORTS_PER_SOL;
+      e.count++;
+      recipients.set(o.destination, e);
+    }
+  }
+  return { sources: topEdges(sources), recipients: topEdges(recipients) };
+}
 
 /** Cross-token trading history for one wallet, from its most recent transactions. */
-export async function analyzeWallet(wallet: string): Promise<WalletProfile> {
-  const [recent, oldest] = await Promise.all([
+export async function analyzeWallet(wallet: string, opts: ProfileOptions = {}): Promise<WalletProfile> {
+  const { pageSize = config.profilePageSize, maxPages = config.profileMaxPages, firstSeen = true } = opts;
+  const [recent, oldest, asFunder] = await Promise.all([
     getHistory(wallet, {
       sortOrder: "desc",
-      limit: config.profilePageSize,
-      maxPages: config.profileMaxPages,
+      limit: pageSize,
+      maxPages,
       filters: { status: "succeeded", tokenAccounts: "balanceChanged" },
     }),
-    getHistory(wallet, { sortOrder: "asc", limit: 1, details: "signatures" }).catch(() => ({ data: [], paginationToken: null })),
+    firstSeen
+      ? getHistory(wallet, { sortOrder: "asc", limit: 1, details: "signatures" }).catch(() => ({ data: [], paginationToken: null }))
+      : Promise.resolve({ data: [], paginationToken: null }),
+    firstSeen ? getFunder(wallet).catch(() => null) : Promise.resolve(null),
   ]);
   if (!recent.data.length) throw new HttpError(404, "No transactions found for this wallet.");
 
@@ -45,6 +88,8 @@ export async function analyzeWallet(wallet: string): Promise<WalletProfile> {
     wallet,
     firstSeen: oldest.data[0]?.blockTime ?? null,
     tokens,
+    funding: fundingFrom(recent.data, wallet),
+    fundedLaunches: asFunder?.launches ?? [],
     stats: {
       tokensTraded: tokens.length,
       closedPositions: closed.length,
@@ -59,4 +104,27 @@ export async function analyzeWallet(wallet: string): Promise<WalletProfile> {
     truncated: Boolean(recent.paginationToken),
     generatedAt: Math.floor(Date.now() / 1000),
   };
+}
+
+export function traderStatsFrom(p: WalletProfile): TraderStats {
+  return {
+    closedPositions: p.stats.closedPositions,
+    tokensTraded: p.stats.tokensTraded,
+    winRate: p.stats.winRate,
+    realizedPnlSol: p.stats.realizedPnlSol,
+    medianHoldSec: p.stats.medianHoldSec,
+    avgBuySol: p.stats.avgBuySol,
+    txsScanned: p.txsScanned,
+  };
+}
+
+/** Lighter, stats-only version used to rate many wallets at once. */
+export async function traderStats(wallet: string): Promise<TraderStats | null> {
+  try {
+    const p = await analyzeWallet(wallet, { pageSize: config.smartTxLimit, maxPages: 1, firstSeen: false });
+    return traderStatsFrom(p);
+  } catch (e) {
+    if (e instanceof HttpError && e.status === 404) return null; // no history: unproven
+    throw e;
+  }
 }
